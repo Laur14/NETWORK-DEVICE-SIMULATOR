@@ -6,5 +6,6 @@ build/
 *.bin
 *.map
 .settings/
-*.txt
 context.txt
+generator
+receiver
