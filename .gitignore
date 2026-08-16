@@ -7,3 +7,4 @@ build/
 *.map
 .settings/
 *.txt
+context.txt
