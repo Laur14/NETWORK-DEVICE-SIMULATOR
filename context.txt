@@ -1,0 +1,1039 @@
+Sigur. Îți las mai jos un context complet, autonom, pe care îl poți da unui alt AI / chat 
+nou ca să înțeleagă exact proiectul și ce vrei să construiești. Am inclus și câteva cerințe suplimentare pe care le consider utile pentru obiectivul tău de a învăța C + POSIX + Linux + concurrency + networking + embedded thinking.
+
+PROIECT DE STUDIU — NETWORK DEVICE SIMULATOR
+=============================================
+SCOP
+----
+Vreau să construiesc în C, pe Linux, un proiect de system programming / embedded networking care să simuleze un mic dispozitiv de networking.
+Scopul principal nu este să construiesc un router real, ci să învăț practic:
+- C pentru embedded/system programming
+- POSIX
+- pthreads
+- procese vs thread-uri
+- mutex-uri
+- semafoare
+- condition variables
+- atomics
+- volatile
+- race conditions
+- deadlock
+- producer/consumer
+- ring buffers
+- IPC
+- shared memory
+- pipes
+- signals
+- watchdog
+- sockets
+- UDP/TCP
+- poll/select
+- serialization
+- endianness
+- managementul memoriei
+- debugging și error handling
+- arhitectură de firmware
+- concepte care se transferă în FreeRTOS
+Vreau să scriu tot proiectul în C, nu C++.
+Pot folosi:
+- C standard library
+- POSIX APIs
+- Linux system calls / APIs
+- pthreads
+- sockets
+- librării standard disponibile pe Linux
+Nu vreau framework-uri externe care să ascundă conceptele pe care vreau să le învăț.
+CONTEXTUL MEU
+-------------
+Sunt absolvent ETI București, specializarea Rețele Software de Telecomunicații.
+Lucrez ca Embedded Software Engineer și am aproximativ 2.5 luni experiență profesională.
+La job am lucrat la un dispozitiv embedded care urmează să intre în producție și am experiență cu:
+- C
+- FreeRTOS
+- Ethernet
+- TDM audio pe 4 canale
+- PTP pentru sincronizare în timp real
+- HTTP server
+- configurare remote
+- firmware update
+- bank swap
+- factory reset
+- watchdog-uri
+- protecție/recovery
+- memorie persistentă pentru configurație
+- date criptate
+- IP whitelist
+- integrare cu hardware/PCB
+Am terminat facultatea recent și sunt înscris la masterul Electronică și Informatică Aplicată la ETI.
+Știu foarte bine programare și algoritmică și predau POO și algoritmică în C++ studenților.
+Nu am o problemă cu algoritmica sau conceptele generale de programare.
+Ceea ce vreau să consolidez este C-ul în stil embedded/system programming și POSIX/concurrency.
+OBIECTIVUL PROIECTULUI
+----------------------
+Vreau să construiesc un mini "network device" care rulează pe Linux.
+Dispozitivul va putea:
+1. primi pachete prin UDP;
+2. interpreta un protocol binar propriu;
+3. pune pachetele într-un ring buffer;
+4. procesa pachetele cu mai multe thread-uri;
+5. avea reguli de firewall;
+6. avea configurație modificabilă din CLI;
+7. avea logging;
+8. avea statistici;
+9. avea watchdog;
+10. folosi mai multe procese;
+11. folosi shared memory pentru monitorizare;
+12. avea IPC;
+13. avea un event loop cu poll();
+14. simula firmware update cu două bank-uri;
+15. simula probleme precum packet loss, queue overflow și power loss în timpul firmware update-ului.
+Vreau ca proiectul să fie făcut incremental și să nu primesc implementarea completă de la început. Vreau să scriu eu codul și să primesc ajutor, explicații, code review și debugging atunci când cer.
+ARHITECTURA GENERALĂ
+--------------------
+La nivel conceptual:
+                         Network Device Simulator
+                              ┌─────────────┐
+                              │ CLI /       │
+                              │ Console     │
+                              └──────┬──────┘
+                                     │
+                                  commands
+                                     │
+                                     ▼
+┌─────────────┐                ┌─────────────┐
+│ Packet      │──UDP──────────►│ RX thread   │
+│ Generator   │                └──────┬──────┘
+└─────────────┘                       │
+                                      ▼
+                                ┌───────────┐
+                                │ Ring      │
+                                │ Buffer    │
+                                └─────┬─────┘
+                                      │
+                                      ▼
+                              ┌───────────────┐
+                              │ Worker pool   │
+                              └───────┬───────┘
+                                      │
+                       ┌──────────────┼─────────────┐
+                       ▼              ▼             ▼
+                   forwarding      firewall      logging
+                       │              │             │
+                       └──────────────┼─────────────┘
+                                      ▼
+                                  UDP output
+                              ┌──────────────┐
+                              │   Watchdog   │
+                              └──────────────┘
+COMPONENTE PRINCIPALE
+---------------------
+1. PACKET FORMAT
+----------------
+Vreau să definesc un protocol binar simplu propriu.
+Conceptual:
++--------+--------+--------+--------+--------+--------+
+| SRC IP | DST IP | SRC PT | DST PT | PROTO  | LENGTH |
+|  4 B   |  4 B   |  2 B   |  2 B   |  1 B   |  2 B   |
++--------+--------+--------+--------+--------+--------+
+                         +
+                       PAYLOAD
+În C pot avea o structură conceptuală de genul:
+typedef struct {
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t protocol;
+    uint16_t length;
+    uint8_t payload[256];
+} packet_t;
+Nu vreau să presupun automat că structura C poate fi trimisă direct prin socket fără probleme.
+Vreau să înțeleg:
+- padding
+- alignment
+- serialization
+- deserialization
+- endianness
+- htons()
+- ntohs()
+- htonl()
+- ntohl()
+- memcpy()
+- validarea lungimii
+- validarea packet-ului
+2. UDP RECEIVER
+---------------
+Prima versiune trebuie să aibă un UDP socket care ascultă, de exemplu:
+127.0.0.1:5000
+Trebuie să folosesc:
+- socket()
+- bind()
+- recvfrom()
+- sendto()
+Obiectiv:
+primesc packet-ul, îl decodez și afișez informațiile.
+Trebuie să înțeleg:
+- file descriptors
+- sockaddr_in
+- IPv4
+- ports
+- byte order
+- blocking I/O
+3. RX THREAD
+------------
+Nu vreau ca thread-ul care primește datele din network să facă tot processing-ul.
+Arhitectura:
+UDP socket
+    |
+    v
+RX thread
+    |
+    v
+Ring buffer
+Trebuie să folosesc pthread_create().
+RX thread este producer.
+Worker threads sunt consumers.
+4. RING BUFFER
+--------------
+Vreau să implementez eu un ring/circular buffer.
+Structură conceptuală:
+typedef struct {
+    packet_t buffer[64];
+    size_t head;
+    size_t tail;
+    size_t count;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} ring_buffer_t;
+Ring buffer-ul trebuie să fie thread-safe.
+Trebuie să învăț:
+- mutex
+- condition variable
+- producer/consumer
+- blocking
+- spurious wakeups
+- while vs if la pthread_cond_wait()
+- queue full
+- queue empty
+- race conditions
+Exemplu conceptual:
+RX thread:
+    receive packet
+    lock
+    dacă bufferul este full -> wait
+    introduce packet
+    signal not_empty
+    unlock
+Worker:
+    lock
+    dacă bufferul este empty -> wait
+    scoate packet
+    signal not_full
+    unlock
+    procesează packet
+IMPORTANT:
+Nu vreau busy waiting.
+5. WORKER THREADS
+-----------------
+Vreau să am mai multe thread-uri:
+RX
+ |
+Ring Buffer
+ |
++-------------+-------------+-------------+
+|             |             |             |
+Worker 1      Worker 2      Worker 3
+forwarding    firewall      statistics
+Trebuie să înțeleg:
+- thread lifecycle
+- pthread_create()
+- pthread_join()
+- thread arguments
+- shared memory
+- race conditions
+- synchronization
+- thread-safe design
+6. FIREWALL
+-----------
+Vreau să implementez o configurație de reguli.
+Exemplu:
+typedef struct {
+    uint32_t ip;
+    uint16_t port;
+    bool allowed;
+} firewall_rule_t;
+CLI:
+> firewall add 192.168.1.10 80 allow
+> firewall add 10.0.0.5 22 deny
+> firewall list
+> firewall remove 10.0.0.5 22
+Firewall rules sunt accesate simultan de:
+- CLI thread
+- worker threads
+Trebuie să protejez configurația.
+Inițial:
+pthread_mutex_t
+Ulterior vreau să încerc:
+pthread_rwlock_t
+Și eventual să înțeleg:
+- reader/writer locks
+- read-heavy workloads
+- copy-on-write
+- atomic pointer concepts
+Vreau să pot explica de ce aleg un anumit mecanism.
+7. SHARED CONFIGURATION
+-----------------------
+Vreau să am o configurație globală / shared state.
+De exemplu:
+- firewall rules
+- routing rules
+- device configuration
+- statistics
+- state
+Trebuie să experimentez cu:
+- mutex
+- atomic
+- volatile
+- race condition
+Vreau să înțeleg clar diferențele:
+volatile != atomic
+atomic != mutex
+mutex != semaphore
+8. ATOMICS
+----------
+Vreau să folosesc stdatomic.h.
+Exemplu:
+atomic_int packet_count;
+și:
+atomic_fetch_add(&packet_count, 1);
+Vreau să compar:
+- counter simplu fără protecție
+- volatile counter
+- atomic counter
+- mutex-protected counter
+Vreau să pot reproduce un race condition și să înțeleg de ce apare.
+9. VOLATILE
+-----------
+Vreau să fac experimente practice pentru a înțelege:
+volatile nu oferă:
+- atomicitate
+- mutual exclusion
+- thread safety
+Vreau să înțeleg de ce volatile este relevant în embedded pentru:
+- memory mapped registers
+- ISR-shared flags
+- hardware-modified state
+Și vreau să înțeleg exact ce face compilatorul diferit.
+10. MUTEX
+---------
+Vreau să folosesc:
+pthread_mutex_lock()
+pthread_mutex_unlock()
+pentru shared resources.
+Trebuie să înțeleg:
+- mutual exclusion
+- ownership
+- critical sections
+- deadlock
+- lock ordering
+- priority inversion conceptual
+- contention
+11. SEMAPHORES
+-------------
+Vreau să implementez și să experimentez cu:
+- binary semaphore
+- counting semaphore
+Trebuie să înțeleg diferența față de mutex.
+Exemplu counting semaphore:
+dacă există 4 resurse disponibile:
+4 -> take -> 3 -> take -> 2
+give -> 3 -> give -> 4
+Vreau să folosesc un astfel de mecanism pentru resource pool.
+12. CONDITION VARIABLES
+-----------------------
+Vreau să folosesc:
+pthread_cond_wait()
+pthread_cond_signal()
+pthread_cond_broadcast()
+în ring buffer.
+Trebuie să înțeleg:
+- condition predicate
+- why wait must generally be inside while
+- spurious wakeups
+- blocking vs polling
+13. DEADLOCK
+------------
+Vreau să creez intenționat un deadlock.
+Exemplu:
+Thread A:
+    lock(A)
+    lock(B)
+Thread B:
+    lock(B)
+    lock(A)
+Apoi vreau să învăț cum îl evit prin:
+- lock ordering
+- reducerea secțiunilor critice
+- timeout
+- redesign
+14. WATCHDOG
+------------
+Vreau un watchdog separat.
+Conceptual:
+              watchdog
+                  |
+           heartbeat every 1s
+                  |
+                  v
+          network daemon
+Network daemon trebuie să transmită periodic heartbeat.
+Dacă watchdog-ul vede:
+current_time - last_heartbeat > 5 seconds
+atunci consideră daemon-ul blocat.
+Acțiuni:
+- SIGTERM
+- așteptare
+- dacă nu moare -> SIGKILL
+- restart
+Vreau să folosesc:
+- signals
+- sigaction()
+- kill()
+- process IDs
+- timeouts
+- monotonic clock dacă este relevant
+Vreau să simulez:
+- thread blocat
+- worker mort
+- deadlock
+- daemon care nu mai trimite heartbeat
+15. LOGGING
+-----------
+Vreau un logging system propriu.
+Format:
+[INFO] RX packet
+[DEBUG] firewall lookup
+[WARN] queue 90% full
+[ERROR] invalid packet
+Ideal:
+mai multe thread-uri trimit log messages către logger.
+Arhitectură:
+Workers
+   |
+   v
+Log queue
+   |
+   v
+Logger thread
+   |
+   v
+device.log
+Trebuie să învăț:
+- thread-safe logging
+- queue
+- file descriptors
+- open()
+- write()
+- buffering
+- flush
+- timestamps
+16. PROCES VS THREAD
+--------------------
+La un moment dat vreau să separ aplicația în două procese:
+network_daemon
+monitor_daemon
+Network daemon:
+- RX
+- workers
+- firewall
+- statistics
+Monitor daemon:
+- queue depth
+- packets/sec
+- dropped packets
+- errors
+- heartbeat
+- device state
+Trebuie să înțeleg foarte clar:
+THREAD:
+- same address space
+- own stack
+- own execution context
+- shared globals
+PROCESS:
+- separate address space
+- stronger isolation
+- IPC needed
+17. SHARED MEMORY
+-----------------
+Vreau să folosesc:
+shm_open()
+mmap()
+munmap()
+shm_unlink()
+pentru a crea un shared state între:
+network_daemon
+        |
+        | shared memory
+        v
+monitor_daemon
+Trebuie să înțeleg:
+- virtual memory
+- shared mappings
+- synchronization between processes
+- named shared memory objects
+- lifecycle
+- cleanup
+18. PIPE
+--------
+Vreau să folosesc și pipe() pentru IPC.
+De exemplu:
+CLI/control process
+        |
+        | pipe
+        v
+network daemon
+Comenzi:
+- reload config
+- print stats
+- shutdown
+- reset counters
+Trebuie să înțeleg:
+- file descriptors
+- read()
+- write()
+- blocking
+- EOF
+- pipe direction
+19. POLL / SELECT
+-----------------
+Vreau să învăț event-driven programming.
+În loc să am:
+- thread pentru UDP
+- thread pentru CLI
+- thread pentru control socket
+vreau să fac:
+             poll()
+          /     |      \
+         /      |       \
+      UDP     stdin    control FD
+Exemplu conceptual:
+struct pollfd fds[3];
+fds[0].fd = udp_fd;
+fds[0].events = POLLIN;
+fds[1].fd = STDIN_FILENO;
+fds[1].events = POLLIN;
+poll(fds, 2, -1);
+Vreau să înțeleg:
+- file descriptors
+- blocking I/O
+- event-driven design
+- POLLIN
+- POLLOUT
+- errors
+- select() vs poll()
+- eventual epoll() ca extensie
+20. TCP
+-------
+După UDP vreau să adaug un TCP control interface.
+De exemplu:
+127.0.0.1:6000
+CLI-ul sau alt client se poate conecta și trimite:
+STATUS
+FIREWALL LIST
+STATS
+RESET
+SHUTDOWN
+Trebuie să învăț:
+- socket()
+- bind()
+- listen()
+- accept()
+- connect()
+- recv()
+- send()
+- close()
+- TCP connection lifecycle
+21. PACKET GENERATOR
+--------------------
+Vreau un program separat:
+packet_generator
+care generează pachete și le trimite prin UDP către simulator.
+Vreau să pot controla:
+- packet rate
+- packet size
+- source IP
+- destination IP
+- source port
+- destination port
+- protocol
+- random payload
+Opțional:
+- burst mode
+- packet loss simulation
+- malformed packet generation
+Scop:
+să pot face stress testing.
+22. STATISTICS
+--------------
+Vreau să am counters precum:
+packets_received
+packets_processed
+packets_dropped
+firewall_drops
+invalid_packets
+queue_full_count
+queue_high_watermark
+bytes_received
+packets_per_second
+Unele counters pot fi atomice.
+Vreau să pot afișa:
+> stats
+și să primesc:
+RX packets: 120304
+Processed: 120120
+Dropped: 184
+Firewall drops: 102
+Queue high watermark: 57/64
+RX rate: 4200 pkt/s
+23. FIRMWARE UPDATE SIMULATOR
+-----------------------------
+Vreau să simulez un sistem de firmware update cu două bank-uri:
+firmware_A.bin
+firmware_B.bin
+Config:
+active_bank = A
+Update:
+> update firmware.bin
+Proces:
+1. verific firmware
+2. identific bank-ul inactiv
+3. scriu imaginea acolo
+4. verific integritatea
+5. schimb active bank
+6. simulez reboot
+7. pornesc noua versiune
+Vreau să folosesc:
+- file I/O
+- mmap() eventual
+- hashing/checksum
+- state machine
+- atomic update al metadata
+- recovery logic
+Vreau să simulez:
+> update firmware.bin --power-loss-at 70%
+și să mă gândesc cum evit ca dispozitivul să devină inutilizabil.
+Vreau să implementez eventual:
+- image validation
+- version
+- checksum/hash
+- active bank
+- pending bank
+- boot attempt counter
+- rollback
+- failed update recovery
+24. STATE MACHINE
+-----------------
+Vreau ca firmware update și eventual device state să fie implementate ca state machine.
+Exemplu:
+IDLE
+  |
+  v
+DOWNLOADING
+  |
+  v
+VALIDATING
+  |
+  v
+READY_TO_BOOT
+  |
+  v
+BOOTING
+  |
+  +---- success ---> RUNNING
+  |
+  +---- failure ---> ROLLBACK
+Vreau să înțeleg:
+- state machines
+- transitions
+- invalid states
+- event-driven design
+25. ERROR HANDLING
+------------------
+Nu vreau să ignor erorile.
+Pentru funcții POSIX trebuie să verific:
+- return values
+- errno
+- EINTR
+- EAGAIN / EWOULDBLOCK
+- partial read/write
+- socket errors
+- pthread errors
+Vreau să învăț să scriu cod robust.
+26. MEMORY MANAGEMENT
+---------------------
+Vreau să evit pe cât posibil alocările dinamice inutile.
+Vreau să experimentez cu:
+- malloc()
+- calloc()
+- realloc()
+- free()
+- stack vs heap
+- memory leak
+- double free
+- use-after-free
+- dangling pointer
+- buffer overflow
+- alignment
+- ownership
+Vreau să rulez proiectul cu:
+- AddressSanitizer
+- UndefinedBehaviorSanitizer
+- Valgrind dacă este disponibil
+27. DEBUGGING
+-------------
+Vreau să folosesc:
+- gcc
+- gdb
+- make
+- valgrind
+- AddressSanitizer
+- UndefinedBehaviorSanitizer
+- strace
+- possibly ltrace
+Vreau să învăț să investighez:
+- segmentation fault
+- deadlock
+- race condition
+- memory leak
+- use-after-free
+- corrupted data
+- blocked thread
+- stuck process
+- socket issue
+28. BUILD SYSTEM
+----------------
+Vreau să folosesc un Makefile, nu să compilez manual fiecare fișier.
+Structură:
+network_sim/
+|
+├── src/
+│   ├── main.c
+│   ├── network.c
+│   ├── ring_buffer.c
+│   ├── worker.c
+│   ├── firewall.c
+│   ├── logger.c
+│   ├── watchdog.c
+│   └── protocol.c
+|
+├── include/
+|
+├── tests/
+|
+├── config/
+|
+├── Makefile
+|
+└── README.md
+Vreau:
+- warnings foarte stricte
+- debug build
+- release build
+- sanitizers
+- eventual static analysis
+Compiler flags recomandate:
+-Wall
+-Wextra
+-Wpedantic
+-Wconversion
+-Wshadow
+-Werror (opțional)
+Debug:
+-g
+-O0
+-fsanitize=address,undefined
+29. TESTING
+-----------
+Vreau să scriu teste pentru:
+- packet serialization
+- packet parsing
+- ring buffer
+- firewall
+- config
+- statistics
+- state machine
+Și teste de concurrency:
+- mai mulți producers
+- mai mulți consumers
+- queue full
+- queue empty
+- shutdown în timp ce thread-urile așteaptă
+30. GRACEFUL SHUTDOWN
+---------------------
+Vreau să pot apăsa CTRL+C și programul să se închidă corect.
+Trebuie:
+- SIGINT
+- set shutdown flag
+- trezirea thread-urilor blocate
+- stop workers
+- close sockets
+- destroy mutexes/condition variables
+- free resources
+- unlink shared memory
+- join threads
+- exit cleanly
+Aici vreau să înțeleg foarte bine lifecycle-ul resurselor.
+31. PROBLEME INTENȚIONAT INTRODUSE
+----------------------------------
+O parte importantă a proiectului este să introduc bug-uri intenționat.
+Exemple:
+- scot mutex-ul și reproduc race condition
+- folosesc greșit volatile
+- introduc deadlock
+- uit free()
+- fac double free
+- accesez după free
+- buffer overflow
+- worker care moare fără să anunțe
+- thread care rămâne blocat
+- queue overflow
+- socket leak
+- file descriptor leak
+Apoi vreau să le detectez cu:
+- gdb
+- sanitizers
+- valgrind
+- strace
+- logging
+32. PROGRESIE
+------------
+Nu vreau să construiesc totul simultan.
+Ordinea recomandată:
+V1:
+UDP -> decode -> print
+V2:
+RX pthread
+V3:
+ring buffer
+V4:
+worker pool
+V5:
+mutex + condition variables
+V6:
+firewall + CLI
+V7:
+logging
+V8:
+statistics + atomic counters
+V9:
+watchdog + signals
+V10:
+separate monitor process
+V11:
+shared memory
+V12:
+pipe IPC
+V13:
+TCP control interface
+V14:
+poll() event loop
+V15:
+firmware bank simulator
+V16:
+power-loss simulation
+V17:
+rollback / recovery
+V18:
+stress testing
+V19:
+sanitizers + debugging
+V20:
+code cleanup + documentation
+33. OBIECTIVE DE ÎNVĂȚARE
+-------------------------
+La final vreau să pot explica foarte bine:
+C:
+- pointers
+- arrays
+- structs
+- unions
+- enums
+- typedef
+- static
+- const
+- volatile
+- restrict (opțional)
+- function pointers
+- memory management
+- alignment
+- padding
+- undefined behavior
+- bit manipulation
+- preprocessor
+- compilation/linking
+- static vs dynamic linkage
+POSIX:
+- pthreads
+- mutex
+- semaphore
+- condition variable
+- rwlock
+- atomic
+- process
+- fork
+- exec
+- pipe
+- shared memory
+- mmap
+- signals
+- sockets
+- select
+- poll
+- file descriptors
+CONCURRENCY:
+- race condition
+- critical section
+- mutual exclusion
+- atomicity
+- deadlock
+- livelock
+- starvation
+- priority inversion
+- producer/consumer
+- synchronization
+- lock ordering
+NETWORKING:
+- UDP
+- TCP
+- sockets
+- bind
+- listen
+- accept
+- send/recv
+- packet format
+- serialization
+- endianness
+- IPv4
+- ports
+EMBEDDED:
+- watchdog
+- firmware update
+- A/B bank
+- rollback
+- state machines
+- bounded memory
+- error handling
+- recovery
+- real-time considerations
+34. REGULA PRINCIPALĂ
+---------------------
+Nu vreau să primesc codul complet de implementare decât dacă cer explicit.
+Când cer ajutor:
+1. explică întâi conceptul;
+2. oferă o direcție de implementare;
+3. oferă pseudocod dacă este necesar;
+4. lasă-mă să scriu codul;
+5. dacă îți trimit codul meu, fă code review;
+6. identifică bug-uri și explică de ce apar;
+7. nu rescrie automat tot proiectul în locul meu.
+Vreau să învăț, nu doar să termin proiectul.
+35. LEGĂTURA CU FREE RTOS
+-------------------------
+După ce implementez componentele în POSIX/Linux, vreau să fac comparații conceptuale cu FreeRTOS.
+Exemple:
+FreeRTOS                 POSIX/Linux
+------------------------------------------------
+Task                     Thread
+Mutex                    pthread_mutex
+Semaphore                POSIX semaphore
+Queue                    custom queue / IPC
+Task notification        condition variable / event mechanism
+Scheduler                Linux scheduler
+Critical section         mutex / scheduler / signal masking,
+                         în funcție de problemă
+Vreau să înțeleg și diferențele, nu doar analogiile.
+36. ÎNTREBĂRI PE CARE VREAU SĂ LE POT RĂSPUNDE
+---------------------------------------------
+La final vreau să pot răspunde fără ezitare la întrebări de genul:
+- Ce este un thread?
+- Ce este un process?
+- Care este diferența?
+- Cum funcționează un mutex?
+- Mutex vs semaphore?
+- Binary vs counting semaphore?
+- Ce este condition variable?
+- De ce pthread_cond_wait() se folosește într-un while?
+- Ce este race condition?
+- Ce este deadlock?
+- Cum previi deadlock?
+- Ce este atomicity?
+- volatile face o operație atomică?
+- volatile face codul thread-safe?
+- Atomic vs mutex?
+- Ce este priority inversion?
+- Ce este priority inheritance?
+- Ce este producer/consumer?
+- Ce este ring buffer?
+- Cum funcționează poll()?
+- Ce este un file descriptor?
+- Cum funcționează socket()?
+- TCP vs UDP?
+- Ce este endianness?
+- Ce este padding într-o structură?
+- Ce se întâmplă dacă faci cast direct între struct și buffer de rețea?
+- Cum faci graceful shutdown?
+- Cum detectezi un deadlock?
+- Cum detectezi memory corruption?
+- Cum ai implementa un watchdog?
+- Cum ai implementa A/B firmware update?
+- Ce se întâmplă dacă alimentarea cade în timpul update-ului?
+- Cum faci rollback?
+37. LEGĂTURA CU INTERVIUL LUXOFT
+----------------------------------
+Proiectul este în primul rând pentru învățare, dar vreau să fie relevant pentru un interviu Embedded Software Engineer.
+Mă interesează în special:
+- C
+- Embedded C
+- Linux
+- POSIX
+- RTOS concepts
+- concurrency
+- synchronization
+- networking
+- debugging
+- system design
+Nu vreau să transform proiectul într-un proiect de algoritmică. Algoritmica o stăpânesc deja.
+Vreau să mă concentrez pe:
+"Cum funcționează un sistem software real care are mai multe thread-uri/procese, network I/O, shared state, synchronization, failure recovery și resource management?"
+38. CRITERIU DE FINALIZARE
+--------------------------
+Proiectul este considerat terminat când:
+- poate primi și transmite packet-uri;
+- are protocol propriu;
+- are RX thread;
+- are ring buffer thread-safe;
+- are worker pool;
+- are firewall;
+- are CLI;
+- are statistics;
+- are logging;
+- are atomic counters;
+- are watchdog;
+- are cel puțin două procese;
+- folosește shared memory;
+- folosește pipe IPC;
+- are TCP control interface;
+- are poll/event loop;
+- are firmware A/B simulation;
+- poate simula power loss;
+- are rollback;
+- are graceful shutdown;
+- are teste;
+- rulează fără memory leaks detectabile;
+- rulează sub sanitizers;
+- are Makefile;
+- are README cu arhitectură și explicații.
+IMPORTANT:
+Vreau ca proiectul să fie construit incremental, iar fiecare etapă să fie înțeleasă înainte de următoarea.
