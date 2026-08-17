@@ -1,6 +1,5 @@
 Debug/
 Release/
-build/
 *.o
 *.elf
 *.bin
