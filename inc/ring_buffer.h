@@ -18,4 +18,6 @@ typedef struct {
     pthread_cond_t not_full;
 } ring_buffer_t;
 void ring_buffer_init(ring_buffer_t *rb);
+void push_ring_buf(ring_buffer_t *rb,packet_t *pk);
+void pop_ring_buf(ring_buffer_t* rb,packet_t* pk);
 #endif
