@@ -6,6 +6,7 @@
 #include <unistd.h>       // close()
 #include "util.h"
 #include <pthread.h>
+#include "ring_buffer.h"
 
 void* rx_thread_func(void *arg){
     int fd = *(int*)arg;
@@ -29,13 +30,6 @@ void* rx_thread_func(void *arg){
         }   
     }
 
-}
-int counter=0;
-void* counter_thread(){
-    for(uint64_t i=0;i<10000;i++){
-        counter++;
-    }
-    return NULL;
 }
 int main(){
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -63,17 +57,11 @@ int main(){
     if(err != 0)
         fprintf(stderr,"pthread_create_error %s\n",strerror(err));
 
-    pthread_t rx_thread1;
-    pthread_t rx_thread2;
-    pthread_create(&rx_thread1,NULL,&counter_thread,NULL);  
-    pthread_create(&rx_thread2,NULL,&counter_thread,NULL); 
-    
-    
-    pthread_join(rx_thread,NULL);
-    pthread_join(rx_thread1,NULL);
-    pthread_join(rx_thread2,NULL);
-    printf("counter: %d \n",counter);
-    
 
+
+    pthread_join(rx_thread,NULL);
+  
+    
+    ring_buffer_t ring;
     return 0;
 }
