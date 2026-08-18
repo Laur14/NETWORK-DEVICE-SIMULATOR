@@ -31,7 +31,7 @@ void push_ring_buf(ring_buffer_t *rb,packet_t *pk){
             fprintf(stderr,"eroare_la_asteptate_ring_buf%s\n",strerror(err));
     }
 
-    memcpy(&rb->buffer,&pk,sizeof(pk));
+    memcpy(&rb->buffer[rb->head],pk,sizeof(packet_t));
 
     rb->head = (rb->head+1)%RING_BUFF_SIZE;
     rb->count++;
@@ -52,12 +52,13 @@ void pop_ring_buf(ring_buffer_t* rb,packet_t* pk){
     while(rb->count == 0)
     {
         err = pthread_cond_wait(&rb->not_empty,&rb->mutex);
-        fprintf(stderr,"cond wait rb pop %s\n",strerror(err));
+        if(err !=0)
+            fprintf(stderr,"cond wait rb pop %s\n",strerror(err));
     }
 
-    memcpy(&pk,&rb->buffer,sizeof(pk));
+    memcpy(pk,&rb->buffer[rb->tail],sizeof(packet_t));
     rb->count--;
-    rb->head = (rb->head-1);
+    rb->tail = (rb->tail+1)% RING_BUFF_SIZE;
 
     err = pthread_cond_signal(&rb->not_full);
     if(err != 0)

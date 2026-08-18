@@ -7,7 +7,7 @@
 #include "util.h"
 #include <pthread.h>
 #include "ring_buffer.h"
-int i=0;
+
 ring_buffer_t ring;
 void* load_rb_func(void *arg){
     int fd = *(int*)arg;
@@ -28,13 +28,6 @@ void* load_rb_func(void *arg){
             packet_deserialize(buf,n,&pk);
             push_ring_buf(&ring,&pk);
         }   
-        i++;
-        if(i==5)
-        {
-            pop_ring_buf(&ring,&pk);
-            printf("lungime buf %u  , dest ip %u\n",pk.length,pk.dst_ip);
-            i=0;
-        }
     }
 
 }
@@ -74,7 +67,7 @@ int main(){
     if(err != 0)
         fprintf(stderr,"load_rb_error %s\n",strerror(err));
 
-    err = pthread_create(&unload_rb,NULL,load_rb_func,&fd);
+    err = pthread_create(&unload_rb,NULL,deload_rb_func,&fd);
 
     if(err != 0)
         fprintf(stderr,"deload_eb_error %s\n",strerror(err));
