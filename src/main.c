@@ -5,11 +5,13 @@
 #include <arpa/inet.h>    // inet_addr() / inet_pton()
 #include <unistd.h>       // close()
 #include "util.h"
-#include <pthread.h>
 #include "ring_buffer.h"
 #include <stdlib.h>
 
+
 worker_args_t ring[3];
+firewall_t fwt;
+
 void* load_rb_func(void *arg){
     int fd = *(int*)arg;
     packet_t pk;
@@ -45,7 +47,8 @@ void* worker_firewall_func(void* arg){
     packet_t pk;
     for(;;){
         pop_ring_buf(wr.in,&pk);
-        push_ring_buf(wr.out,&pk);
+        if(firewall_check(&fwt,pk.src_ip,pk.src_port))
+            push_ring_buf(wr.out,&pk);
     }
 }
 void* worker_stats_func(void* arg){
@@ -69,6 +72,8 @@ int main(){
         return 1;
     }
 
+    firewall_init(&fwt);
+    firewall_add_rule(&fwt,ntohl(inet_addr("10.42.0.1")),(uint16_t)5000,true);
     struct sockaddr_in addr ;
     addr.sin_family=AF_INET;
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -79,6 +84,8 @@ int main(){
         perror("bind");
         return 1;
     }
+
+
     ring_buffer_t* rb1 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
     ring_buffer_t* rb2 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
     ring_buffer_t* rb3 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
@@ -98,6 +105,7 @@ int main(){
     pthread_t forword;
     pthread_t firewall;
     pthread_t status;
+
     int err = pthread_create(&load_rb,NULL,load_rb_func,&fd);
 
     if(err != 0)

@@ -49,7 +49,46 @@ void packet_deserialize(const uint8_t* buf,ssize_t lenght, packet_t* pk){
     
 }
 
-
+void firewall_init(firewall_t *fw){
+    fw->count = 0;
+    int err = pthread_mutex_init(&fw->mutex,NULL); 
+    if(err != 0)
+        fprintf(stderr,"eroare la init firewall %s\n",strerror(err));
+}
+bool firewall_check(firewall_t* fwt,uint32_t ip ,uint16_t port)
+{
+    pthread_mutex_lock(&fwt->mutex);
+    for(size_t i = 0;i<fwt->count;i++)
+    {
+        if(fwt->rules[i].ip == ip && fwt->rules[i].port == port )
+        {
+            if(fwt->rules[i].allowed == true)
+            {
+                pthread_mutex_unlock(&fwt->mutex);
+                return true;
+            }
+            else
+                break;
+        }
+    }
+    pthread_mutex_unlock(&fwt->mutex);
+    return false;
+}
+void firewall_add_rule(firewall_t *fwt,uint32_t ip ,uint16_t port, bool allowed){
+    firewall_rule_t fw;
+    fw.allowed = allowed;
+    fw.ip = ip;
+    fw.port = port;
+    pthread_mutex_lock(&fwt->mutex);
+    if(fwt->count<MAX_RULES)
+    {   
+        fwt->rules[fwt->count] = fw;
+        fwt->count++;
+    }
+    else
+        printf("nu mai e loc pentru alte reguli\n");
+    pthread_mutex_unlock(&fwt->mutex);
+}
 size_t packet_serialized(packet_t pk, uint8_t* buff){
     uint16_t temp16;
     uint32_t temp32;
