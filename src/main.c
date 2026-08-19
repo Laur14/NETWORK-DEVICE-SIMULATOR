@@ -53,7 +53,11 @@ void* worker_stats_func(void* arg){
     packet_t pk;
     for(;;){
         pop_ring_buf(wr.in,&pk);
-        printf("am ajuns la status ci %u\n ",pk.dst_ip);
+        char ip_str[INET_ADDRSTRLEN];
+        struct in_addr addr;
+        addr.s_addr = htonl(pk.src_ip);
+        inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+        printf("am ajuns la status ci %s\n", ip_str);
     }
 }
 
@@ -88,6 +92,7 @@ int main(){
     ring[1].in = rb2;
     ring[1].out = rb3;
     ring[2].in = rb3;
+    ring[2].out = NULL;
 
     pthread_t load_rb;    
     pthread_t forword;
