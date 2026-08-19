@@ -7,8 +7,9 @@
 #include "util.h"
 #include <pthread.h>
 #include "ring_buffer.h"
+#include <stdlib.h>
 
-ring_buffer_t ring;
+worker_args_t ring[3];
 void* load_rb_func(void *arg){
     int fd = *(int*)arg;
     packet_t pk;
@@ -26,19 +27,36 @@ void* load_rb_func(void *arg){
         }
         else{
             packet_deserialize(buf,n,&pk);
-            push_ring_buf(&ring,&pk);
+            push_ring_buf(ring[0].in,&pk);
         }   
     }
 
 }
-void* deload_rb_func(void* arg){
+void* worker_forward_func(void* arg){
+    worker_args_t wr = *(worker_args_t*)arg;
     packet_t pk;
-    for(;;)
-    { 
-        pop_ring_buf(&ring,&pk);
-        printf("lungime buf %u  , dest ip %u\n",pk.length,pk.dst_ip);
+    for(;;){
+        pop_ring_buf(wr.in,&pk);
+        push_ring_buf(wr.out,&pk);
     }
 }
+void* worker_firewall_func(void* arg){
+    worker_args_t wr = *(worker_args_t*)arg;
+    packet_t pk;
+    for(;;){
+        pop_ring_buf(wr.in,&pk);
+        push_ring_buf(wr.out,&pk);
+    }
+}
+void* worker_stats_func(void* arg){
+    worker_args_t wr = *(worker_args_t*)arg;
+    packet_t pk;
+    for(;;){
+        pop_ring_buf(wr.in,&pk);
+        printf("am ajuns la status ci %u\n ",pk.dst_ip);
+    }
+}
+
 int main(){
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(fd == -1)
@@ -57,22 +75,46 @@ int main(){
         perror("bind");
         return 1;
     }
+    ring_buffer_t* rb1 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
+    ring_buffer_t* rb2 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
+    ring_buffer_t* rb3 = (ring_buffer_t*)malloc(sizeof(ring_buffer_t));
+
+    ring_buffer_init(rb1);
+    ring_buffer_init(rb2);
+    ring_buffer_init(rb3);
+
+    ring[0].in = rb1;
+    ring[0].out = rb2;
+    ring[1].in = rb2;
+    ring[1].out = rb3;
+    ring[2].in = rb3;
 
     pthread_t load_rb;    
-    pthread_t unload_rb;
-    ring_buffer_init(&ring);
-   
+    pthread_t forword;
+    pthread_t firewall;
+    pthread_t status;
     int err = pthread_create(&load_rb,NULL,load_rb_func,&fd);
 
     if(err != 0)
         fprintf(stderr,"load_rb_error %s\n",strerror(err));
 
-    err = pthread_create(&unload_rb,NULL,deload_rb_func,&fd);
-
+    err = pthread_create(&forword,NULL,worker_forward_func,&ring[0]);
     if(err != 0)
-        fprintf(stderr,"deload_eb_error %s\n",strerror(err));
+        fprintf(stderr,"worker_forward_func %s\n",strerror(err));
+
+    err = pthread_create(&firewall,NULL,worker_firewall_func,&ring[1]);
+    if(err != 0)
+        fprintf(stderr,"worker_firewall_func %s\n",strerror(err));
+
+    err = pthread_create(&status,NULL,worker_stats_func,&ring[2]);
+    if(err != 0)
+        fprintf(stderr,"worker_stats_func %s\n",strerror(err));
+
     pthread_join(load_rb,NULL);
-    pthread_join(unload_rb,NULL);
+    pthread_join(forword,NULL);
+    pthread_join(firewall,NULL);
+    pthread_join(status,NULL);
+   
     
     
     
